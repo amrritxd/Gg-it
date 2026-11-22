@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Same Tab Player + Telegram</title>
+<style>
+:root{
+  --bg:#f3f6fb; --surface:#ffffff; --text:#14202e; --muted:#5b6b7e;
+  --line:#d3dce8; --accent:#1f5fd6; --accent-text:#ffffff; --err:#b3261e; --ok:#1b7a3d;
+  color-scheme: light;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#0e141c; --surface:#17202b; --text:#e8eef6; --muted:#94a3b6;
+    --line:#2a3646; --accent:#6aa0ff; --accent-text:#0b1220; --err:#ff8a80; --ok:#6fd98f;
+    color-scheme: dark;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;line-height:1.5;padding:16px}
+.bar{max-width:900px;margin:0 auto 16px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;display:grid;gap:10px}
+h1{font-size:1.2rem;margin:0}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+input{font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;min-width:0}
+#token{flex:1 1 260px}
+#chat{flex:1 1 140px}
+#url{flex:1 1 240px}
+#count{width:80px}
+button{font:inherit;font-weight:600;background:var(--accent);color:var(--accent-text);border:0;border-radius:8px;padding:10px 16px;cursor:pointer}
+button.alt{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+input:focus-visible,button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+#status{font-size:.9rem;font-weight:600;color:var(--muted)}
+#status.on{color:var(--ok)}
+#msg{font-size:.9rem;color:var(--muted);min-height:1.3em}
+#msg.err{color:var(--err)}
+.hint{font-size:.82rem;color:var(--muted)}
+#grid{max-width:900px;margin:0 auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.cell{background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.cell iframe{display:block;width:100%;aspect-ratio:16/9;border:0;background:#000}
+</style>
+</head>
+<body>
+<section class="bar">
+  <h1>Same Tab Player + Telegram</h1>
+
+  <div class="row">
+    <input id="token" type="password" placeholder="Telegram bot token" aria-label="Bot token" autocomplete="off">
+    <input id="chat" type="text" inputmode="numeric" placeholder="Chat ID (optional)" aria-label="Allowed chat ID" autocomplete="off">
+    <button id="connect" type="button">Connect</button>
+    <button id="disconnect" type="button" class="alt" hidden>Stop</button>
+  </div>
+  <div id="status">Telegram: not connected</div>
+  <div class="hint">Connect ke baad bot ko link bhejo. Aakhir me number likho to utne players khulenge, jaise: https://example.com/video 5</div>
+
+  <div class="row">
+    <input id="url" type="url" inputmode="url" placeholder="Ya yahan link daalo (manual)" aria-label="Link" autocomplete="off">
+    <input id="count" type="number" min="1" max="10" value="10" aria-label="Kitne players">
+    <button id="go" type="button">Yahin kholo</button>
+  </div>
+  <div id="msg" role="status" aria-live="polite">Saare players isi tab me niche dikhenge.</div>
+</section>
+<div id="grid"></div>
+
+<script>
+(function(){
+  var tokenEl=document.getElementById('token');
+  var chatEl=document.getElementById('chat');
+  var urlEl=document.getElementById('url');
+  var countEl=document.getElementById('count');
+  var grid=document.getElementById('grid');
+  var msg=document.getElementById('msg');
+  var statusEl=document.getElementById('status');
+  var btnConnect=document.getElementById('connect');
+  var btnStop=document.getElementById('disconnect');
+
+  var running=false, offset=0, api='', allowed='', ctrl=null;
+
+  function say(t,err){msg.textContent=t;msg.className=err?'err':'';}
+  function setStatus(t,on){statusEl.textContent=t;statusEl.className=on?'on':'';}
+  function sleep(ms){return new Promise(function(r){setTimeout(r,ms);});}
+
+  try{
+    tokenEl.value=localStorage.getItem('tg_token')||'';
+    chatEl.value=localStorage.getItem('tg_chat')||'';
+  }catch(e){}
+  if(!chatEl.value) chatEl.value='8918487470';
+
+  function openPlayers(raw,n){
+    if(!/^https?:\/\//i.test(raw)) raw='https://'+raw;
+    var u;
+    try{u=new URL(raw);}catch(e){say('Link sahi nahi hai.',true);return false;}
+    n=parseInt(n,10);
+    if(isNaN(n)||n<1) n=1;
+    if(n>10) n=10;
+    grid.textContent='';
+    for(var i=0;i<n;i++){
+      var cell=document.createElement('div');
+      cell.className='cell';
+      var f=document.createElement('iframe');
+      f.src=u.href;
+      f.setAttribute('allow','autoplay; fullscreen; picture-in-picture; encrypted-media');
+      f.setAttribute('allowfullscreen','');
+      f.setAttribute('loading','eager');
+      f.title='Player '+(i+1);
+      cell.appendChild(f);
+      grid.appendChild(cell);
+    }
+    say(n+' players isi tab me khule. Agar koi blank dikhe, to us website ne embed block kiya hai.');
+    return n;
+  }
+
+  document.getElementById('go').addEventListener('click',function(){
+    var raw=urlEl.value.trim();
+    if(!raw){say('Pehle link daalo.',true);return;}
+    openPlayers(raw,countEl.value);
+  });
+
+  function reply(chatId,text){
+    fetch(api+'/sendMessage',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({chat_id:chatId,text:text})
+    }).catch(function(){});
+  }
+
+  function handle(u){
+    var m=u.message||u.channel_post;
+    if(!m||!m.text) return;
+    var cid=String(m.chat.id);
+    if(allowed && cid!==allowed){
+      reply(m.chat.id,'Ye chat allowed nahi hai.');
+      return;
+    }
+    var hit=m.text.match(/https?:\/\/\S+/i);
+    if(!hit) return;
+    var link=hit[0];
+    var rest=m.text.replace(link,'');
+    var num=rest.match(/\b(\d{1,2})\b/);
+    var n=num?num[1]:countEl.value;
+    urlEl.value=link;
+    var opened=openPlayers(link,n);
+    if(opened) reply(m.chat.id,'\u2705 '+opened+' players khul gaye.');
+    if(!allowed) say('Chat ID '+cid+' se link aaya. Chahe to isse Chat ID box me daal kar lock kar lo.');
+  }
+
+  async function poll(){
+    // skip old messages
+    try{
+      var r0=await fetch(api+'/getUpdates?offset=-1',{signal:ctrl.signal});
+      var j0=await r0.json();
+      if(!j0.ok){setStatus('Telegram: '+(j0.description||'error'),false);say('Token check karo.',true);stop();return;}
+      if(j0.result.length) offset=j0.result[j0.result.length-1].update_id+1;
+    }catch(e){
+      if(!running) return;
+      setStatus('Telegram: network error',false);stop();return;
+    }
+    setStatus('Telegram: connected, link ka intezaar...',true);
+    while(running){
+      try{
+        var r=await fetch(api+'/getUpdates?timeout=25&offset='+offset,{signal:ctrl.signal});
+        var j=await r.json();
+        if(!j.ok){
+          setStatus('Telegram: '+(j.description||'error'),false);
+          if(j.error_code===409) say('Is bot par webhook ya dusra poller chal raha hai.',true);
+          stop();return;
+        }
+        j.result.forEach(function(u){offset=u.update_id+1;handle(u);});
+      }catch(e){
+        if(!running) return;
+        await sleep(3000);
+      }
+    }
+  }
+
+  function start(){
+    var t=tokenEl.value.trim();
+    if(!t){say('Bot token daalo.',true);return;}
+    allowed=chatEl.value.trim();
+    try{localStorage.setItem('tg_token',t);localStorage.setItem('tg_chat',allowed);}catch(e){}
+    api='https://api.telegram.org/bot'+t;
+    ctrl=new AbortController();
+    running=true;
+    btnConnect.hidden=true;btnStop.hidden=false;
+    setStatus('Telegram: connecting...',false);
+    poll();
+  }
+
+  function stop(){
+    running=false;
+    if(ctrl) ctrl.abort();
+    btnConnect.hidden=false;btnStop.hidden=true;
+    if(statusEl.className==='on') setStatus('Telegram: stopped',false);
+  }
+
+  btnConnect.addEventListener('click',start);
+  btnStop.addEventListener('click',stop);
+})();
+</script>
+</body>
+</html>
